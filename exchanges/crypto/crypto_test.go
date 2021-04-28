@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"testing"
@@ -13,6 +14,7 @@ import (
 const (
 	apiKey                  = ""
 	apiSecret               = ""
+	apiSandbox              = "https://uat-api.3ona.co/"
 	canManipulateRealOrders = false
 )
 
@@ -57,7 +59,18 @@ func areTestAPIKeysSet() bool {
 }
 
 func TestCrypto_GetInstruments(t *testing.T) {
+	_, err := cr.GetInstruments()
+	if err != nil {
+		t.Error("GetInstruments() error", err)
+	}
+}
 
+func TestCrypto_FetchTradablePairs(t *testing.T) {
+	pairs, err := cr.FetchTradablePairs("BTC-USD")
+	if err != nil {
+		t.Error("GetInstruments() error", err)
+	}
+	fmt.Println(pairs)
 }
 
 // Implement tests for API endpoints below

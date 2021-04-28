@@ -41,11 +41,13 @@ const (
 const (
 	cryptoAPIURL     = "https://api.crypto.com"
 	cryptoAPIVersion = "v2"
+	cryptoWSAPIURL   = "wss://stream.crypto.com"
+	cryptoWebsocketTimer    = time.Minute
 
 	// Rate Limit constants
 
 	// Public endpoints
-	cryptoInstruments = "public/instruments"
+	cryptoInstruments = "public/get-instruments"
 
 	// Authenticated endpoints
 	cryptoWithdrawalHistory = "private/get-withdrawal-history"
@@ -88,16 +90,15 @@ func (cr *Crypto) SendHTTPRequest(ep exchange.URL, apiRequest string, params map
 
 	headers := make(map[string]string)
 	if authenticated {
-		headers["X-USER"] = cr.API.Credentials.ClientID
-		hmac := crypto.GetHMAC(crypto.HashSHA256, payload, []byte(cr.API.Credentials.Key))
-		headers["X-SIGNATURE"] = crypto.HexEncodeToString(hmac)
+		hmac := crypto.GetHMAC(crypto.HashSHA256, payload, []byte(cr.API.Credentials.Secret))
+		params["sig"] = crypto.HexEncodeToString(hmac)
 	}
 	headers["Content-Type"] = "application/json"
 
 	var rawMsg json.RawMessage
 	err = cr.SendPayload(context.Background(), &request.Item{
-		Method:        http.MethodPost,
-		Path:          endpoint,
+		Method:        http.MethodGet,
+		Path:          fmt.Sprintf("%s/%s/%s", endpoint, cryptoAPIVersion, apiRequest),
 		Headers:       headers,
 		Body:          bytes.NewBuffer(payload),
 		Result:        &rawMsg,

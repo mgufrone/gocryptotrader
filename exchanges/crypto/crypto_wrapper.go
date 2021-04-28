@@ -1,6 +1,10 @@
 package crypto
 
 import (
+	"errors"
+	"fmt"
+	"github.com/gorilla/websocket"
+	"net/http"
 	"sync"
 	"time"
 
@@ -115,8 +119,8 @@ func (cr *Crypto) SetDefaults() {
 	// NOTE: SET THE URLs HERE
 	cr.API.Endpoints = cr.NewEndpoints()
 	cr.API.Endpoints.SetDefaultEndpoints(map[exchange.URL]string{
-		exchange.RestSpot: cryptoAPIURL,
-		// exchange.WebsocketSpot: cryptoWSAPIURL,
+		exchange.RestSpot:      cryptoAPIURL,
+		exchange.WebsocketSpot: cryptoWSAPIURL,
 	})
 	cr.Websocket = stream.New()
 	cr.WebsocketResponseMaxLimit = exchange.DefaultWebsocketResponseMaxLimit
@@ -132,52 +136,39 @@ func (cr *Crypto) Setup(exch *config.ExchangeConfig) error {
 	}
 
 	cr.SetupDefaults(exch)
-
-	/*
-		wsRunningEndpoint, err := cr.API.Endpoints.GetURL(exchange.WebsocketSpot)
+	if !cr.Websocket.IsEnabled() || !cr.IsEnabled() {
+		return errors.New(stream.WebsocketNotEnabled)
+	}
+	var dialer websocket.Dialer
+	err := cr.Websocket.Conn.Dial(&dialer, http.Header{})
+	if err != nil {
+		return err
+	}
+	// Can set up custom ping handler per websocket connection.
+	cr.Websocket.Conn.SetupPingHandler(stream.PingHandler{
+		MessageType: websocket.PingMessage,
+		Delay:       cryptoWebsocketTimer,
+	})
+	if cr.Verbose {
+		log.Debugf(log.ExchangeSys, "%s Connected to Websocket.\n", cr.Name)
+	}
+	// This reader routine is called prior to initiating a subscription for
+	// efficient processing.
+	go cr.wsReadData()
+	if cr.GetAuthenticatedAPISupport(exchange.WebsocketAuthentication) {
+		err = cr.WsAuth()
 		if err != nil {
-			return err
+			cr.Websocket.DataHandler <- err
+			cr.Websocket.SetCanUseAuthenticatedEndpoints(false)
 		}
-
-		// If websocket is supported, please fill out the following
-
-		err = cr.Websocket.Setup(
-			&stream.WebsocketSetup{
-				Enabled:                          exch.Features.Enabled.Websocket,
-				Verbose:                          exch.Verbose,
-				AuthenticatedWebsocketAPISupport: exch.API.AuthenticatedWebsocketSupport,
-				WebsocketTimeout:                 exch.WebsocketTrafficTimeout,
-				DefaultURL:                       cryptoWSAPIURL,
-				ExchangeName:                     exch.Name,
-				RunningURL:                       wsRunningEndpoint,
-				Connector:                        cr.WsConnect,
-				Subscriber:                       cr.Subscribe,
-				UnSubscriber:                     cr.Unsubscribe,
-				Features:                         &cr.Features.Supports.WebsocketCapabilities,
-			})
-		if err != nil {
-			return err
-		}
-
-		cr.WebsocketConn = &stream.WebsocketConnection{
-			ExchangeName:         cr.Name,
-			URL:                  cr.Websocket.GetWebsocketURL(),
-			ProxyURL:             cr.Websocket.GetProxyAddress(),
-			Verbose:              cr.Verbose,
-			ResponseCheckTimeout: exch.WebsocketResponseCheckTimeout,
-			ResponseMaxLimit:     exch.WebsocketResponseMaxLimit,
-		}
-
-		// NOTE: PLEASE ENSURE YOU SET THE ORDERBOOK BUFFER SETTINGS CORRECTLY
-		cr.Websocket.Orderbook.Setup(
-			exch.OrderbookConfig.WebsocketBufferLimit,
-			true,
-			true,
-			false,
-			false,
-			exch.Name)
-	*/
-	return nil
+	}
+	// Generates the default subscription set, based off enabled pairs.
+	subs, err := cr.GenerateDefaultSubscriptions()
+	if err != nil {
+		return err
+	}
+	// Finally subscribes to each individual channel.
+	return cr.Websocket.SubscribeToChannels(subs)
 }
 
 // Start starts the Crypto go routine
@@ -213,9 +204,20 @@ func (cr *Crypto) Run() {
 }
 
 // FetchTradablePairs returns a list of the exchanges tradable pairs
-func (cr *Crypto) FetchTradablePairs(asset asset.Item) ([]string, error) {
+func (cr *Crypto) FetchTradablePairs(_ asset.Item) (res []string, err error) {
 	// Implement fetching the exchange available pairs if supported
-	return nil, nil
+	var instruments InstrumentResult
+	if cr.Websocket.IsEnabled() {
+		instruments, err = cr.GetWsInstruments()
+	} else {
+		instruments, err = cr.GetInstruments()
+	}
+	if err == nil {
+		for _, v := range instruments.Instruments {
+			res = append(res, fmt.Sprintf("%s%s%s", v.BaseCurrency, currency.DashDelimiter, v.QuoteCurrency))
+		}
+	}
+	return
 }
 
 // UpdateTradablePairs updates the exchanges available pairs and stores
